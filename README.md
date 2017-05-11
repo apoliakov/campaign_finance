@@ -1,2 +1,2 @@
 # campaign_finance
-"Data Ad Populum"
+Playing with campaign finance FEC data. Work in progress
