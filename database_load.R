@@ -20,6 +20,7 @@ recreate_db = function()
   }
   tryCatch({ iquery(DB, "remove(ENTITY)")},  warning = invisible, error = invisible )
   tryCatch({ iquery(DB, "remove(TRANSACTION)")},  warning = invisible, error = invisible )
+  tryCatch({ iquery(DB, "remove(LINKAGE)")},  warning = invisible, error = invisible )
 }
 
 ARRAYS = list()
@@ -690,6 +691,32 @@ create_transaction = function()
   tryCatch({ iquery(DB, "remove(TRANSACTIONS_TMP)")  },  warning = invisible, error = invisible )
 }
 
+create_linkage = function()
+{
+   num_entities= iquery(DB, "op_count(ENTITY)", return=T)$count
+   iquery(DB, sprintf("
+   store(
+    redimension(
+     equi_join(
+      equi_join(
+       project(CANDIDATE_COMMITTEE_LINKAGE, candidate_id, committee_id, linkage_id),
+       project(apply(ENTITY, candidate_idx, entity_idx), entity_id, candidate_idx),
+       'left_names=candidate_id',
+       'right_names=entity_id'
+      ),
+      project(apply(ENTITY, committee_idx, entity_idx), entity_id, committee_idx),
+      'left_names=committee_id',
+      'right_names=entity_id'
+     ),
+     <linkage_id:int64>
+     [candidate_idx = 0:%i,400000,0,
+      committee_idx = 0:%i,400000,0],
+     false
+    ),
+    LINKAGE
+   )", num_entities, num_entities))
+}
+
 load_all = function()
 {
   recreate_db()
@@ -707,6 +734,8 @@ load_all = function()
   create_entity()
   print("Clustering entity transactions")
   create_transaction()
+  print("Repopulating candidate-committee linkage")
+  create_linkage()
 }
   
 
