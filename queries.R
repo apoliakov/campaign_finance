@@ -49,29 +49,3 @@ plot_candidate_donations = function(candidate_regex='TRUMP, DONALD', entity_id=N
   series = series['2014/']
   dygraph(series)
 }
-
-
-
-
-
-
-trump_entity = DB$filter(ENTITY, "entity_type=1 and regex(entity_name, '.*CLINTON.*KAINE.*')")
-trump_entity_r = as.R(trump_entity)
-trump_committees = DB$project(DB$equi_join(LINKAGE, trump_entity, "'left_names=candidate_idx'", "'right_names=entity_idx'", "'keep_dimensions=1'"), committee_idx) 
-trump_committees_r = as.R(trump_committees)
-trump_entities = data.frame(entity_idx= c(trump_committees_r$committee_idx, trump_entity_r$entity_idx))
-trump_entities = as.scidb(DB, trump_entities, types=c("int64"))
-trump_transactions = DB$equi_join(TRANSACTION, trump_entities, "'left_names=to_entity_idx'", "'right_names=entity_idx'", "'keep_dimensions=1'")
-trump_transactions_by_date = DB$grouped_aggregate(trump_transactions, 
-                                "count(*) as num_transactions", 
-                                "sum(transaction_amount) as total",
-                                transaction_date_int)
-trump_transactions_by_date = as.R(trump_transactions_by_date, only_attributes=T)
-
-dates = as.Date(as.character(trump_transactions_by_date$transaction_date_int), format="%Y%m%d")
-series = xts(data.frame(
-              total=trump_transactions_by_date$total,
-              num_transactions=trump_transactions_by_date$num_transactions), order.by=dates)
-series = series['2014/']
-dygraph(series)
-
