@@ -18,6 +18,8 @@ recreate_db = function()
     tryCatch({ iquery(DB, paste0("remove(", name, ")"))  },  warning = invisible, error = invisible )
     iquery(DB, paste0("create array ", name, " ", schema))
   }
+  tryCatch({ iquery(DB, "remove(ENTITY)")},  warning = invisible, error = invisible )
+  tryCatch({ iquery(DB, "remove(TRANSACTION)")},  warning = invisible, error = invisible )
 }
 
 ARRAYS = list()
@@ -240,7 +242,7 @@ load_oth = function()
                                         int64(substr(a13, 4,4)) * 10000 +  int64(substr(a13, 0,2))* 100 + int64(substr(a13, 2,2)),
                                         int64(null)),
        transaction_amount,          double(a14),
-       other_id,                    a15,
+       other_id,                    iif(a15 = '', null, a15),
        transaction_id,              a16,
        file_num,                    dcast(a17, int64(null)),
        memo_co,                     char(a18),
@@ -259,81 +261,6 @@ load_oth = function()
   print(system("wc -l itoth.txt", intern=T))
   system("rm itoth.txt")
   system("rm oth16.zip")
-}
-
-ARRAYS["COMMITTEE_TO_CANDIDATE"] = "
-                  < committee_id            : string,
-                    amendment_id            : char,
-                    report_type             : string,
-                    transaction_pgi         : string,
-                    image_num               : string,
-                    transaction_type        : string,
-                    entity_type             : string,
-                    name                    : string,
-                    city                    : string,
-                    state                   : string,
-                    zip                     : string,
-                    employer                : string, 
-                    occupation              : string,
-                    transaction_date_int    : int64,
-                    transaction_amount      : double,
-                    other_id                : string, 
-                    candidate_id            : string,
-                    transaction_id          : string,
-                    file_num                : int64,
-                    memo_co                 : char,
-                    memo_text               : string,
-                    sub_id                  : string>
-                  [pas_idx = 0:*]"
-load_pas = function()
-{
- system("wget ftp://ftp.fec.gov/FEC/2016/pas216.zip", ignore.stdout=T, ignore.stderr=T)
- system("unzip pas216.zip")
- iquery(DB, sprintf("
-  store(
-    project(
-     unpack(
-      apply(
-       aio_input(
-         '%s/itpas2.txt', 'num_attributes=22', 'attribute_delimiter=|'
-       ),
-       committee_id,                a0, 
-       amendment_id,                char(a1),
-       report_type,                 a2,
-       transaction_pgi,             a3,
-       image_num,                   a4,
-       transaction_type,            a5,
-       entity_type,                 a6,
-       name,                        a7,
-       city,                        a8,
-       state,                       a9, 
-       zip,                         a10,
-       employer,                    a11,
-       occupation,                  a12,
-       transaction_date_int,        iif(strlen(a13) > 0, 
-                                        int64(substr(a13, 4,4)) * 10000 +  int64(substr(a13, 0,2))* 100 + int64(substr(a13, 2,2)),
-                                        int64(null)),
-       transaction_amount,          double(a14),
-       other_id,                    a15,
-       candidate_id,                a16,
-       transaction_id,              a17,
-       file_num,                    dcast(a18, int64(null)),
-       memo_co,                     char(a19),
-       memo_text,                   a20,
-       sub_id,                      a21
-      ),
-      oth_idx
-     ),
-     committee_id, amendment_id, report_type, transaction_pgi, image_num, transaction_type, 
-     entity_type, name, city, state, zip, employer, occupation, transaction_date_int, transaction_amount, 
-     other_id, candidate_id, transaction_id, file_num, memo_co, memo_text, sub_id
-    ),
-    COMMITTEE_TO_CANDIDATE
-   )", WORK_DIR))
-  print(iquery(DB, "op_count(COMMITTEE_TO_CANDIDATE)", return=T))
-  print(system("wc -l itpas2.txt", intern=T))
-  system("rm itpas2.txt")
-  system("rm pas216.zip")
 }
 
 ARRAYS["INDIVIDUAL_CONTRIBUTIONS"] = "
@@ -393,8 +320,8 @@ load_indiv = function()
                                         int64(substr(a13, 4,4)) * 10000 +  int64(substr(a13, 0,2))* 100 + int64(substr(a13, 2,2)),
                                         int64(null)),
        transaction_amount,          double(a14),
-       other_id,                    a15,
-       transaction_id,                a16,
+       other_id,                    iif(a15 = '', null, a15),
+       transaction_id,              a16,
        file_num,                    dcast(a17, int64(null)),
        memo_co,                     char(a18),
        memo_text,                   a19,
@@ -415,17 +342,14 @@ load_indiv = function()
   system("rm -rf by_date")
 }
 
-
-ARRAYS["ENTITY"] = "
-    < entity_id            : string,
-      entity_type          : int64,   --1: candidate, 2: committee, 3: individual
-      entity_name          : string>
-    [entity_idx = 0:*,100000,0]"
-
 create_entity = function()
 {
   tryCatch({ iquery(DB, "remove(ENTITY_TMP)")  },  warning = invisible, error = invisible )
-  iquery(DB, paste("create temp array ENTITY_TMP", ARRAYS["ENTITY"]))
+  iquery(DB, "create temp array ENTITY_TMP  
+    < entity_id            : string,
+      entity_type          : int64,   --1: candidate, 2: committee, 3: individual, 4: unknown
+      entity_name          : string>
+    [entity_idx = 0:*,400000,0]")
   
   #Add all the candidates 
   iquery(DB, "
@@ -474,7 +398,7 @@ create_entity = function()
         grouped_aggregate( 
          apply(
           project(
-           INDIVIDUAL_CONTRIBUTIONS,
+            INDIVIDUAL_CONTRIBUTIONS,
            name, zip, employer, occupation
           ),
           entity_id, 'I:' + name + '|' + zip + '|' + employer + '|' + occupation,
@@ -495,67 +419,294 @@ create_entity = function()
    )"
   )
   
+  iquery(DB, "
+   insert(
+    redimension(
+     apply(
+      cross_join(
+       unpack(
+        filter(
+         equi_join(
+          grouped_aggregate( 
+           apply(
+            project(
+             COMMITTEE_TO_COMMITTEE,
+             name, zip, employer, occupation
+            ),
+            entity_id, 'I:' + name + '|' + zip + '|' + employer + '|' + occupation,
+            entity_type, 3, 
+            entity_name, name
+           ),
+           count(*), entity_id, entity_type, entity_name
+          ) as A,
+          apply(
+           project(ENTITY_TMP, entity_id),
+           z, 1
+          ),
+          'left_names=entity_id',
+          'right_names=entity_id',
+          'left_outer=T'
+         ),
+         z is null
+        ),
+        unique_individual_idx
+       ),
+       aggregate(apply(ENTITY_TMP, ival, entity_idx), max(ival) as max_idx)
+      ),
+      entity_idx, max_idx + 1 + unique_individual_idx
+     ),
+     ENTITY_TMP
+    ),
+    ENTITY_TMP
+   )"
+  )
+  
+  iquery(DB, "
+   insert(
+    redimension(
+     apply(
+      cross_join(
+       unpack(
+        apply(
+         grouped_aggregate(
+          filter(
+           equi_join(
+            project(filter(COMMITTEE_TO_COMMITTEE, other_id is not null), other_id, name, zip),
+            project(ENTITY_TMP, entity_id, entity_name),
+            'left_names=other_id',
+            'right_names=entity_id',
+            'left_outer=1'
+           ),
+           entity_name is null
+          ),
+          count(*), max(name) as name, max(zip) as zip, other_id
+         ),
+         entity_id, other_id, 
+         entity_name, 'Unlisted Entity:' + name  + '|' + zip,
+         entity_type, 4
+        ),
+        unique_individual_idx
+       ),
+       aggregate(apply(ENTITY_TMP, ival, entity_idx), max(ival) as max_idx)
+      ),
+      entity_idx, max_idx + 1 + unique_individual_idx
+     ),
+     ENTITY_TMP
+    ),
+    ENTITY_TMP
+   )")
+  
+  iquery(DB, "
+   insert(
+    redimension(
+     apply(
+      cross_join(
+       unpack(
+        apply(
+         grouped_aggregate(
+          filter(
+           equi_join(
+            project(filter(INDIVIDUAL_CONTRIBUTIONS, other_id is not null), other_id, name, zip),
+            project(ENTITY_TMP, entity_id, entity_name),
+            'left_names=other_id',
+            'right_names=entity_id',
+            'left_outer=1'
+           ),
+           entity_name is null
+          ),
+          count(*), max(name) as name, max(zip) as zip, other_id
+         ),
+         entity_id, other_id, 
+         entity_name, 'Unlisted Entity:' + name  + '|' + zip,
+         entity_type, 4
+        ),
+        unique_individual_idx
+       ),
+       aggregate(apply(ENTITY_TMP, ival, entity_idx), max(ival) as max_idx)
+      ),
+      entity_idx, max_idx + 1 + unique_individual_idx
+     ),
+     ENTITY_TMP
+    ),
+    ENTITY_TMP
+   )")
+
+  #In the Committee_to_committee dataset, there was also one "TO" committee id that was not in the COMMITTEE list. Whoops!
+  iquery(DB, "
+   insert(
+    redimension(
+     apply(
+      cross_join(
+       unpack(
+        apply(
+         grouped_aggregate(
+          filter(
+           equi_join(
+            project(COMMITTEE_TO_COMMITTEE, committee_id),
+            project(ENTITY_TMP, entity_id, entity_name),
+            'left_names=committee_id',
+            'right_names=entity_id',
+            'left_outer=1'
+           ),
+           entity_name is null
+          ),
+          count(*), committee_id
+         ),
+         entity_id, committee_id, 
+         entity_name, 'Unlisted Entity',
+         entity_type, 4
+        ),
+        unique_individual_idx
+       ),
+       aggregate(apply(ENTITY_TMP, ival, entity_idx), max(ival) as max_idx)
+      ),
+      entity_idx, max_idx + 1 + unique_individual_idx
+     ),
+     ENTITY_TMP
+    ),
+    ENTITY_TMP
+   )")
+  
+  cnt = iquery(DB, "op_count(filter(grouped_aggregate(ENTITY_TMP, count(*), entity_id), count>1))",return=T)
+  if(cnt$count != 0) 
+  {
+    stop("Whoops! Got duplicate entities")
+  }
+  
+  num_entities= iquery(DB, "op_count(ENTITY_TMP)", return=T)$count
+  iquery(DB, sprintf("create array ENTITY
+    < entity_id            : string,
+      entity_type          : int64,   --1: candidate, 2: committee, 3: individual, 4: unknown
+      entity_name          : string>
+    [entity_idx = 0:%i,400000,0]", num_entities-1))
+  
   #Now shuffle the array and store
   iquery(DB, "store(project(sort(apply(ENTITY_TMP, r, random()), r, 100000), entity_id, entity_type, entity_name), ENTITY)")
   tryCatch({ iquery(DB, "remove(ENTITY_TMP)")  },  warning = invisible, error = invisible )
 }
 
-ARRAYS["TRANSACTIONS"] = "
-    < transaction_amount: double,
-      transaction_id: string>
-    [from_entity_idx = 0:*,100000,0,
-     to_entity_idx   = 0:*,100000,0,
-     transaction_date_int = 0:*,100,0,
-     synthetic       = 0:*,10000,0]"
-
-create_transactions = function()
+create_transaction = function()
 {
   tryCatch({ iquery(DB, "remove(TRANSACTIONS_TMP)")  },  warning = invisible, error = invisible )
   iquery(DB, "create array TRANSACTIONS_TMP 
-             <transaction_amount:double, transaction_id:string, transaction_date_int:int64, from_entity_idx:int64, to_entity_idx:int64>
-             [i=0:*,1000000,0]")  
+             <transaction_amount:double, transaction_type:string, transaction_id:string, transaction_date_int:int64, from_entity_idx:int64, to_entity_idx:int64>
+             [transaction_idx=0:*,100000,0]")  
   
   iquery(DB, "
    insert(
      project(
       unpack(
-       index_lookup(
-        index_lookup( 
-         apply(
-          INDIVIDUAL_CONTRIBUTIONS,
-          entity_id,  iif(other_id='',  'I:' + name + '|' + zip + '|' + employer + '|' + occupation, other_id)
-         ) as A,
-         project(ENTITY, entity_id) as FROM_ENTITY, A.entity_id, from_entity_idx
+       project(
+        equi_join(
+         equi_join(
+          project(
+           apply(
+            apply(
+             COMMITTEE_TO_COMMITTEE,
+             individual_id,  'I:' + name + '|' + zip + '|' + employer + '|' + occupation
+            ),
+            from_entity_id,  iif(other_id is not null and entity_type<>'IND', other_id, individual_id)
+           ),
+           committee_id, from_entity_id, transaction_amount, transaction_type, transaction_id, transaction_date_int
+          ),
+          apply(project(ENTITY, entity_id), from_entity_idx, entity_idx), 
+          'left_names=from_entity_id', 
+          'right_names=entity_id'
+         ),
+         apply(project(ENTITY, entity_id), to_entity_idx, entity_idx),       
+         'left_names=committee_id',
+         'right_names=entity_id'
         ),
-        project(ENTITY, entity_id) as TO_ENTITY, A.committee_id, to_entity_idx
+        transaction_amount, transaction_type, transaction_id, transaction_date_int, from_entity_idx, to_entity_idx
        ),
-       i, 100000
+       transaction_idx, 100000
       ),
-      transaction_amount, transaction_id, transaction_date_int, from_entity_idx, to_entity_idx
+      transaction_amount, transaction_type, transaction_id, transaction_date_int, from_entity_idx, to_entity_idx
      ),
      TRANSACTIONS_TMP
     )"
+   )
+  
+  iquery(DB, "
+   insert(
+    redimension( 
+     apply(
+      cross_join(
+       project(
+        unpack(
+         project(
+          equi_join(
+           equi_join(
+            project(
+             apply(
+              apply(
+               INDIVIDUAL_CONTRIBUTIONS,
+               individual_id,  'I:' + name + '|' + zip + '|' + employer + '|' + occupation
+              ),
+              from_entity_id,  iif(other_id is not null and entity_type<>'IND', other_id, individual_id)
+             ),
+             committee_id, from_entity_id, transaction_amount, transaction_type, transaction_id, transaction_date_int
+            ),
+            apply(project(ENTITY, entity_id), from_entity_idx, entity_idx), 
+            'left_names=from_entity_id', 
+            'right_names=entity_id'
+           ),
+           apply(project(ENTITY, entity_id), to_entity_idx, entity_idx),       
+           'left_names=committee_id',
+           'right_names=entity_id'
+          ),
+          transaction_amount, transaction_type, transaction_id, transaction_date_int, from_entity_idx, to_entity_idx
+         ),
+         j, 100000
+        ),
+        transaction_amount, transaction_type, transaction_id, transaction_date_int, from_entity_idx, to_entity_idx
+       ),
+       aggregate(apply(TRANSACTIONS_TMP, tidx_val, transaction_idx), max(tidx_val) as max_idx)
+      ),
+      transaction_idx, max_idx + j + 1
+     ),
+     TRANSACTIONS_TMP
+    ),
+    TRANSACTIONS_TMP
+   )"
   )
-  
-
-  
+  num_transactions = iquery(DB, "op_count(TRANSACTIONS_TMP)",return=T)
+  num_c2c = iquery(DB, "op_count(COMMITTEE_TO_COMMITTEE)",return=T)
+  num_ind = iquery(DB, "op_count(INDIVIDUAL_CONTRIBUTIONS)",return=T)
+  if(num_transactions$count != num_c2c$count + num_ind$count)
+  {
+    stop("Some transactions are missing!")
+  }
+  num_entities= iquery(DB, "op_count(ENTITY)", return=T)$count
+  iquery(DB, sprintf(" create array TRANSACTION
+    < transaction_amount: double,
+      transaction_id: string, 
+      transaction_type: string>
+    [from_entity_idx = 0:%i,400000,0,
+     to_entity_idx   = 0:%i,400000,0,
+     transaction_date_int = 0:*,10000,0,
+     synthetic       = 0:*,5000,0]", num_entities-1, num_entities-1))
+  iquery(DB, "store(redimension(TRANSACTIONS_TMP, TRANSACTION), TRANSACTION)")
+  tryCatch({ iquery(DB, "remove(TRANSACTIONS_TMP)")  },  warning = invisible, error = invisible )
 }
-
-
 
 load_all = function()
 {
   recreate_db()
+  print("Loading committees")
   load_committee()
+  print("Loading candidates")
   load_candidate()
+  print("Loading candidate-committee-linkage")
   load_ccl()
+  print("Loading committee-committee transfers")
   load_oth()
-  load_pas()
+  print("Loading individual-committee transfers")
   load_indiv()
+  print("Extracting unique entities")
   create_entity()
-  
-  
-  
+  print("Clustering entity transactions")
+  create_transaction()
 }
   
 

@@ -28,6 +28,10 @@ as.R(DB$filter(CCL, "candidate_id='P60007168'"))
 as.R(DB$filter(COMMITTEE, "committee_candidate_id='P60007168'"))
 
 #89 grand in individual contributions unnacounted for, say what?
-iquery(DB, "aggregate(filter(INDIVIDUAL_CONTRIBUTIONS, name='' and zip='' and employer='' and occupation=''), sum(transaction_amount))",return=T)
+iquery(DB, "grouped_aggregate(filter(INDIVIDUAL_CONTRIBUTIONS, name='' and zip='' and employer='' and occupation=''), sum(transaction_amount), transaction_type)",return=T)
 #But it doesn't appear to be going to interesting candidates
 iquery(DB, "equi_join(grouped_aggregate(filter(INDIVIDUAL_CONTRIBUTIONS, name='' and zip='' and employer='' and occupation=''), sum(transaction_amount), committee_id), ENTITY, 'left_names=committee_id', 'right_names=entity_id')",return=T)
+
+#All donations by 
+iquery(DB, "equi_join(ENTITY, grouped_aggregate(filter(INDIVIDUAL_CONTRIBUTIONS, regex(name, '.*TRUMP.*') and regex(name, '.*DONALD.*')), sum(transaction_amount), name, zip, transaction_type, committee_id), 'left_names=entity_id', 'right_names=committee_id')", return=T)
+
