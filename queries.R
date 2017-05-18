@@ -8,6 +8,12 @@ CCL = scidb(DB, "CCL")
 library('xts')
 library('dygraphs')
 
+entity_lookup = function(regex)
+{
+  filter_expr = sprintf("regex(entity_name, '.*%s.*')", regex)
+  as.R(DB$filter(ENTITY, R(filter_expr)))
+}
+
 plot_candidate_donations = function(candidate_regex='TRUMP, DONALD', entity_id=NULL)
 {
   if(!is.null(entity_id))
