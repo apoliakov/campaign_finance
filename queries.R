@@ -8,44 +8,168 @@ CCL = scidb(DB, "CCL")
 library('xts')
 library('dygraphs')
 
-entity_lookup = function(regex)
+TYPE_CANDIDATE  = 1
+TYPE_PAC        = 2
+TYPE_INDIVIDUAL = 3
+
+#lookup_entity('NATIONAL.*RIFLE', 2)
+#lookup_entity(entity_id='P00003392')
+lookup_entity = function(entity_regex, entity_type, entity_id)
 {
-  filter_expr = sprintf("regex(entity_name, '.*%s.*')", regex)
+  if(!missing(entity_id))
+  {
+    if(!missing(entity_regex) || !missing(entity_type))
+    {
+      stop("Please provide either entity ID or regex and optional type")
+    }
+    filter_expr=paste0("entity_id = '",entity_id,"'")
+  } else
+  {
+    if(missing(entity_regex))
+    {
+      stop("Please provide either entity ID or regex and optional type")
+    }
+    filter_expr = sprintf("regex(entity_name, '.*%s.*')", entity_regex)
+    if(!missing(entity_type))
+    {
+      filter_expr = paste(filter_expr, "and entity_type=", entity_type)
+    }
+  }
   as.R(DB$filter(ENTITY, R(filter_expr)))
 }
 
-plot_candidate_donations = function(candidate_regex='TRUMP, DONALD', entity_id=NULL)
+get_transactions_to_entity = function(entity_regex, entity_type, entity_id)
 {
-  if(!is.null(entity_id))
+  entity = lookup_entity(entity_regex, entity_type, entity_id)
+  if(nrow(entity)==0)
   {
-    filter_expr = sprintf("entity_id='%s'", entity_id)
-  } else {
-    filter_expr = sprintf("entity_type=1 and regex(entity_name, '.*%s.*')", candidate_regex)
+    stop("No entity found")
+  } else if(nrow(entity)>1)
+  {
+    print(entity)
+    stop("multiple entities match, be more specific")
   }
-  candidate_entity = DB$filter(ENTITY, R(filter_expr))
-  candidate_entity_r = as.R(candidate_entity)
-  if(nrow(candidate_entity_r) == 0)
-  {
-    stop("candidate not found")
-  } else if (nrow(candidate_entity_r) > 1)
-  {
-    print(candidate_entity_r)
-    stop("multiple candidates match regex")
-  }
-  candidate_committees = DB$project(DB$equi_join(LINKAGE, candidate_entity, "'left_names=candidate_idx'", "'right_names=entity_idx'", "'keep_dimensions=1'"), committee_idx) 
-  candidate_committees_r = as.R(candidate_committees)
-  candidate_entities = data.frame(entity_idx= c(candidate_committees_r$committee_idx, candidate_entity_r$entity_idx))
-  candidate_entities = as.scidb(DB, candidate_entities, types=c("int64"))
-  candidate_transactions = DB$equi_join(TRANSACTION, candidate_entities, "'left_names=to_entity_idx'", "'right_names=entity_idx'", "'keep_dimensions=1'")
-  candidate_transactions_by_date = DB$grouped_aggregate(candidate_transactions, 
+  associated_committees = DB$filter(LINKAGE, R(paste0("candidate_idx=",entity$entity_idx)))
+  associated_committees_r = as.R(associated_committees)
+  all_entities = data.frame(entity_idx= c(associated_committees_r$committee_idx, entity$entity_idx))
+  
+  all_entities = as.scidb(DB, all_entities, types=c("int64"))
+  transactions = DB$equi_join(TRANSACTION, all_entities, "'left_names=to_entity_idx'", "'right_names=entity_idx'", "'keep_dimensions=1'")
+  transactions_by_date = DB$grouped_aggregate(transactions, 
                                 "count(*) as num_transactions", 
                                 "sum(transaction_amount) as total",
                                 transaction_date_int)
-  candidate_transactions_by_date = as.R(candidate_transactions_by_date, only_attributes=T)
-  dates = as.Date(as.character(candidate_transactions_by_date$transaction_date_int), format="%Y%m%d")
+  transactions_by_date = as.R(transactions_by_date, only_attributes=T)
+  dates = as.Date(as.character(transactions_by_date$transaction_date_int), format="%Y%m%d")
   series = xts(data.frame(
-              total=candidate_transactions_by_date$total,
-              num_transactions=candidate_transactions_by_date$num_transactions), order.by=dates)
-  series = series['2014/']
-  dygraph(series)
+              total=transactions_by_date$total,
+              num_transactions=transactions_by_date$num_transactions), order.by=dates)
+  return(series)
 }
+
+timeseries_example = function()
+{
+  trump_transactions   = get_transactions_to_entity(entity_id='P80001571')
+  jeb_transactions     = get_transactions_to_entity(entity_id='P60008059')
+  cruz_transactions    = get_transactions_to_entity(entity_id='P60006111')
+  rubio_transactions   = get_transactions_to_entity(entity_id='P60006723')
+  kasich_transactions  = get_transactions_to_entity(entity_id='P60003670')
+  
+  rep = merge(trump_transactions, jeb_transactions, cruz_transactions, rubio_transactions, kasich_transactions)
+  rep = rep[, c(1,3,5,7,9)]
+  colnames(rep) = c("trump", "jeb", "cruz", "rubio", "kasich")
+  rep = rep["2015/"]
+  dygraph(rep) %>%
+    dyRangeSelector() %>% 
+    dyEvent('2016-07-18', 'REPUBLICAN NATIONAL CONVENTION', labelLoc = "top") %>%
+    dyEvent('2015-08-06', 'FIRST PRIMARY DEBATE', labelLoc = "top") %>%
+    dyEvent('2016-03-10', 'LAST PRIMARY DEBATE', labelLoc = "top") %>%
+    dyEvent('2016-05-04', 'ALL EXCEPT TRUMP SUSPENDED', labelLoc = "top") %>%
+    dyEvent('2016-11-08', 'GENERAL ELECTION', labelLoc = "top") %>%
+    dyLegend(show = "follow") %>%
+    dyOptions(stackedGraph=TRUE,labelsKMB = "M") %>%
+    dyRoller(rollPeriod = 1)
+  
+  bernie_transactions  = get_transactions_to_entity(entity_id='P60007168')
+  hillary_transactions = get_transactions_to_entity(entity_id='P00003392')
+  dem = merge(bernie_transactions, hillary_transactions)
+  dem = dem[, c(1,3)]
+  colnames(dem) = c("bernie", "hillary")
+  dem = dem["2015/"]
+  dem_v = merge(bernie_transactions, hillary_transactions)
+  dem_v = dem_v[, c(2,4)]
+  colnames(dem_v) = c("bernie", "hillary")
+  dem_v = dem_v["2015/"]
+  browsable(tagList(
+    dygraph(dem, group="1", main="Transaction Dollar Amount") %>%
+     dyOptions(stackedGraph=TRUE,labelsKMB = "M") %>% 
+     dyRangeSelector() %>% 
+     dyLegend(show = "follow") %>%
+     dyEvent('2016-11-08', 'GENERAL ELECTION', labelLoc = "top") %>%
+     dyRoller(rollPeriod = 1),
+    dygraph(dem_v, group="1", main="Transaction Volume") %>%
+     dyOptions(stackedGraph=TRUE,labelsKMB = "M") %>% 
+     dyRangeSelector() %>% 
+     dyLegend(show = "follow") %>%
+     dyEvent('2016-11-08', 'GENERAL ELECTION', labelLoc = "top") %>%
+     dyRoller(rollPeriod = 1)))
+  
+  hvt = merge(hillary_transactions, trump_transactions)
+  hvt = hvt[, c(1,3)]
+  colnames(hvt) = c("hillary", "trump")
+  hvt = hvt["2015/"]
+  hvt_v = merge(hillary_transactions, trump_transactions)
+  hvt_v = hvt_v[, c(2,4)]
+  colnames(hvt_v) = c("hillary", "trump")
+  hvt_v = hvt_v["2015/"]
+  browsable(tagList(
+    dygraph(hvt, group="1", main="Transaction Dollar Amount", height=400) %>%
+      dyOptions(stackedGraph=TRUE,labelsKMB = "M") %>% 
+      dyLegend(show = "follow") %>%
+      dyEvent('2016-11-08', 'GENERAL ELECTION', labelLoc = "top") %>%
+      dyEvent('2016-09-26', 'FIRST DEBATE', labelLoc = "top") %>%
+      dyEvent('2016-10-04', 'SECOND DEBATE', labelLoc = "top") %>%
+      dyEvent('2016-10-09', 'VP DEBATE', labelLoc = "top") %>%
+      dyEvent('2016-10-19', 'THIRD DEBATE', labelLoc = "top") %>%
+      dyRoller(rollPeriod = 1),
+   dygraph(hvt_v, group="1", main="Transaction Volume", height=400) %>%
+     dyOptions(stackedGraph=TRUE,labelsKMB = "M") %>% 
+     dyRangeSelector() %>% 
+     dyLegend(show = "follow") %>%
+     dyEvent('2016-11-08', 'GENERAL ELECTION', labelLoc = "top") %>%
+     dyEvent('2016-09-26', 'FIRST DEBATE', labelLoc = "top") %>%
+     dyEvent('2016-10-04', 'SECOND DEBATE', labelLoc = "top") %>%
+     dyEvent('2016-10-09', 'VP DEBATE', labelLoc = "top") %>%
+     dyEvent('2016-10-19', 'THIRD DEBATE', labelLoc = "top") %>%
+     dyRoller(rollPeriod = 1)
+  ))
+}
+
+top_contributors_to_entity = function(entity_idx=4327273, n=10)
+{
+  transactions = DB$between(TRANSACTION, null, R(entity_idx), null, null, null, R(entity_idx), null, null)
+  transactions_by_donor = DB$grouped_aggregate(transactions, 
+                                "sum(transaction_amount) as total",
+                                "from_entity_idx")
+  transactions_by_donor = DB$sort(transactions_by_donor, "total desc")
+  transactions_by_donor = store(DB, transactions_by_donor, temp=T)
+  top_n = as.R(DB$between(transactions_by_donor, 0, R(n)))
+  other = as.R(DB$aggregate(DB$between(transactions_by_donor, R(n+1), null), "sum(total) as total"))
+  result = data.frame( from_entity_idx = c(top_n$from_entity_idx, -1),
+                       total = c(top_n$total, other$total),
+                       to_entity_idx = rep(entity_idx, nrow(top_n)+1))
+  return(result)
+}
+
+get_entity_metadata = function(entity_idx_vector)
+{
+  entities = as.scidb(DB, entity_idx_vector, types=c("int64"))
+  entities = as.R(DB$equi_join(entities, ENTITY, "'left_names=val'", "'right_names=entity_idx'", "'left_outer=T'"))
+  entity_names = entities$entity_name
+  entity_names[is.na(entity_names)] = "OTHER"
+  entity_types = entities$entity_type
+  entity_types[is.na(entity_types)] = "OTHER"
+  return(data.frame(entity_names, entity_types))
+}
+
+  
