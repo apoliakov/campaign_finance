@@ -145,9 +145,9 @@ timeseries_example = function()
   ))
 }
 
-top_contributors_to_entity = function(entity_idx=4327273, n=10)
+top_contributors_to_entity = function(entity_idx=4327273, n=10, start_date="null", end_date="null")
 {
-  transactions = DB$between(TRANSACTION, null, R(entity_idx), null, null, null, R(entity_idx), null, null)
+  transactions = DB$between(TRANSACTION, null, R(entity_idx), R(start_date), null, null, R(entity_idx), R(end_date), null)
   transactions_by_donor = DB$grouped_aggregate(transactions, 
                                 "sum(transaction_amount) as total",
                                 "from_entity_idx")
@@ -155,9 +155,17 @@ top_contributors_to_entity = function(entity_idx=4327273, n=10)
   transactions_by_donor = store(DB, transactions_by_donor, temp=T)
   top_n = as.R(DB$between(transactions_by_donor, 0, R(n)))
   other = as.R(DB$aggregate(DB$between(transactions_by_donor, R(n+1), null), "sum(total) as total"))
-  result = data.frame( from_entity_idx = c(top_n$from_entity_idx, -1),
-                       total = c(top_n$total, other$total),
-                       to_entity_idx = rep(entity_idx, nrow(top_n)+1))
+  if(other$total > 0)
+  {
+    result = data.frame( from_entity_idx = c(top_n$from_entity_idx, -1),
+                         total = c(top_n$total, other$total),
+                         to_entity_idx = rep(entity_idx, nrow(top_n)+1))
+  } else
+  {
+    result = data.frame( from_entity_idx = top_n$from_entity_idx,
+                         total = top_n$total,
+                         to_entity_idx = rep(entity_idx, nrow(top_n)))
+  }
   return(result)
 }
 
@@ -165,11 +173,87 @@ get_entity_metadata = function(entity_idx_vector)
 {
   entities = as.scidb(DB, entity_idx_vector, types=c("int64"))
   entities = as.R(DB$equi_join(entities, ENTITY, "'left_names=val'", "'right_names=entity_idx'", "'left_outer=T'"))
-  entity_names = entities$entity_name
+  entity_names = paste(entities$entity_id, "|", entities$entity_name)
   entity_names[is.na(entity_names)] = "OTHER"
   entity_types = entities$entity_type
   entity_types[is.na(entity_types)] = "OTHER"
-  return(data.frame(entity_names, entity_types))
+  return(data.frame(entity_name=entity_names, entity_type=entity_types))
 }
+
+candidate_contributor_network = function(candidate_idx=2570157, fanout=20, depth=2, start_date="null", end_date="null")
+{
+  candidate_pacs = as.R(DB$between(LINKAGE, R(candidate_idx), null, R(candidate_idx), null))
+  result = data.frame(from_entity=c(), total=c(), to_entity=c())
+  to_lookup = candidate_idx
+  visited = c()
+  if(nrow(candidate_pacs)>0)
+  {
+    result=data.frame(from_entity_idx=candidate_pacs$committee_idx, total=rep(-1, nrow(candidate_pacs)), to_entity_idx=candidate_pacs$candidate_idx)
+    to_lookup = c(to_lookup, candidate_pacs$committee_idx)
+  }
+  while(depth>0)
+  {
+    next_lookup = c()
+    for(i in 1:length(to_lookup))
+    {
+      idx=to_lookup[i]
+      contrib = top_contributors_to_entity(idx, fanout, start_date, end_date)
+      visited = c(visited, idx)
+      if(nrow(contrib)==0)
+        next
+      result = rbind(result, contrib)
+      print(result)
+      new_ids = contrib$from_entity_idx
+      new_ids = new_ids[new_ids!=-1]
+      new_ids = new_ids [ !(new_ids %in% visited) ]
+      next_lookup = c(next_lookup, new_ids)
+    }
+    to_lookup = unique(next_lookup)
+    depth = depth-1
+  }
+  return(result)
+}
+
+foo = function()
+{
+  result = candidate_contributor_network(depth=2) 
+  result = subset(result, from_entity_idx!=-1) ###MMEBE
+  indeces = unique(c(result$from_entity_idx, result$to_entity_idx))
+  links = data.frame(Source=match(result$from_entity_idx, indeces)-1,
+                     Target=match(result$to_entity_idx, indeces)-1,
+                     Value= result$total)
+  nodes = get_entity_metadata(indeces)
+  forceNetwork(links, nodes, "Source", "Target", "Value", "entity_name", Group="entity_type",
+               linkWidth = networkD3::JS("function(d) { return Math.sqrt(d.value/1000000); }"))
+  
+  
+  result = candidate_contributor_network(depth=3, fanout=20, start_date="20150101", end_date="20160301") 
+  result = subset(result, from_entity_idx!=-1) ###MMEBE
+  indeces = unique(c(result$from_entity_idx, result$to_entity_idx))
+  links = data.frame(Source=match(result$from_entity_idx, indeces)-1,
+                     Target=match(result$to_entity_idx, indeces)-1,
+                     Value= result$total)
+  nodes = get_entity_metadata(indeces)
+  forceNetwork(links, nodes, "Source", "Target", "Value", "entity_name", Group="entity_type",
+               linkWidth = networkD3::JS("function(d) { return Math.sqrt(d.value/1000000); }"),
+               opacity=1)
+  
+  #PAUL RYAN
+  result = candidate_contributor_network(candidate_idx=2184276, depth=3, fanout=10, start_date="null", end_date="null") 
+  result = subset(result, from_entity_idx!=-1) ###MMEBE
+  indeces = unique(c(result$from_entity_idx, result$to_entity_idx))
+  links = data.frame(Source=match(result$from_entity_idx, indeces)-1,
+                     Target=match(result$to_entity_idx, indeces)-1,
+                     Value= result$total)
+  nodes = get_entity_metadata(indeces)
+  forceNetwork(links, nodes, "Source", "Target", "Value", "entity_name", Group="entity_type",
+               linkWidth = networkD3::JS("function(d) { return Math.sqrt(d.value/1000000); }"),
+               opacity=1)
+  
+  
+  
+}
+
+
 
   
