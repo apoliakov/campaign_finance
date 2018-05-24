@@ -1,12 +1,14 @@
 library(scidb)
-DB = scidbconnect()
+db = scidbconnect()
 
-ENTITY = scidb(DB, "ENTITY")
-TRANSACTION = scidb(DB, "TRANSACTION")
-CCL = scidb(DB, "CCL")
+ENTITY = scidb(db, "ENTITY")
+TRANSACTION = scidb(db, "TRANSACTION")
+CCL = scidb(db, "CCL")
 
 library('xts')
 library('dygraphs')
+library('htmltools')
+library(networkD3)
 
 TYPE_CANDIDATE  = 1
 TYPE_PAC        = 2
@@ -16,6 +18,7 @@ TYPE_INDIVIDUAL = 3
 #lookup_entity(entity_id='P00003392')
 lookup_entity = function(entity_regex, entity_type, entity_id)
 {
+  entity = ENTITY
   if(!missing(entity_id))
   {
     if(!missing(entity_regex) || !missing(entity_type))
@@ -32,10 +35,10 @@ lookup_entity = function(entity_regex, entity_type, entity_id)
     filter_expr = sprintf("regex(entity_name, '.*%s.*')", entity_regex)
     if(!missing(entity_type))
     {
-      filter_expr = paste(filter_expr, "and entity_type=", entity_type)
+      entity = DB$filter(ENTITY, R(paste("entity_type=", entity_type)))
     }
   }
-  as.R(DB$filter(ENTITY, R(filter_expr)))
+  as.R(db$filter(entity, R(filter_expr)))
 }
 
 get_transactions_to_entity = function(entity_regex, entity_type, entity_id)
@@ -49,13 +52,13 @@ get_transactions_to_entity = function(entity_regex, entity_type, entity_id)
     print(entity)
     stop("multiple entities match, be more specific")
   }
-  associated_committees = DB$filter(LINKAGE, R(paste0("candidate_idx=",entity$entity_idx)))
+  associated_committees = db$filter(LINKAGE, R(paste0("candidate_idx=",entity$entity_idx)))
   associated_committees_r = as.R(associated_committees)
   all_entities = data.frame(entity_idx= c(associated_committees_r$committee_idx, entity$entity_idx))
   
-  all_entities = as.scidb(DB, all_entities, types=c("int64"))
-  transactions = DB$equi_join(TRANSACTION, all_entities, "'left_names=to_entity_idx'", "'right_names=entity_idx'", "'keep_dimensions=1'")
-  transactions_by_date = DB$grouped_aggregate(transactions, 
+  all_entities = as.scidb(db, all_entities, types=c("int64"))
+  transactions = db$equi_join(TRANSACTION, all_entities, "'left_names=to_entity_idx'", "'right_names=entity_idx'", "'keep_dimensions=1'")
+  transactions_by_date = db$grouped_aggregate(transactions, 
                                 "count(*) as num_transactions", 
                                 "sum(transaction_amount) as total",
                                 transaction_date_int)
@@ -88,7 +91,7 @@ timeseries_example = function()
     dyEvent('2016-11-08', 'GENERAL ELECTION', labelLoc = "top") %>%
     dyLegend(show = "follow") %>%
     dyOptions(stackedGraph=TRUE,labelsKMB = "M") %>%
-    dyRoller(rollPeriod = 1)
+    dyRoller(rollPeriod = 5) %>% dyLegend()
   
   bernie_transactions  = get_transactions_to_entity(entity_id='P60007168')
   hillary_transactions = get_transactions_to_entity(entity_id='P00003392')
@@ -106,13 +109,13 @@ timeseries_example = function()
      dyRangeSelector() %>% 
      dyLegend(show = "follow") %>%
      dyEvent('2016-11-08', 'GENERAL ELECTION', labelLoc = "top") %>%
-     dyRoller(rollPeriod = 1),
+     dyRoller(rollPeriod = 5),
     dygraph(dem_v, group="1", main="Transaction Volume") %>%
      dyOptions(stackedGraph=TRUE,labelsKMB = "M") %>% 
      dyRangeSelector() %>% 
      dyLegend(show = "follow") %>%
      dyEvent('2016-11-08', 'GENERAL ELECTION', labelLoc = "top") %>%
-     dyRoller(rollPeriod = 1)))
+     dyRoller(rollPeriod = 5)))
   
   hvt = merge(hillary_transactions, trump_transactions)
   hvt = hvt[, c(1,3)]
@@ -131,7 +134,7 @@ timeseries_example = function()
       dyEvent('2016-10-04', 'SECOND DEBATE', labelLoc = "top") %>%
       dyEvent('2016-10-09', 'VP DEBATE', labelLoc = "top") %>%
       dyEvent('2016-10-19', 'THIRD DEBATE', labelLoc = "top") %>%
-      dyRoller(rollPeriod = 1),
+      dyRoller(rollPeriod = 5),
    dygraph(hvt_v, group="1", main="Transaction Volume", height=400) %>%
      dyOptions(stackedGraph=TRUE,labelsKMB = "M") %>% 
      dyRangeSelector() %>% 
@@ -141,20 +144,21 @@ timeseries_example = function()
      dyEvent('2016-10-04', 'SECOND DEBATE', labelLoc = "top") %>%
      dyEvent('2016-10-09', 'VP DEBATE', labelLoc = "top") %>%
      dyEvent('2016-10-19', 'THIRD DEBATE', labelLoc = "top") %>%
-     dyRoller(rollPeriod = 1)
+     dyRoller(rollPeriod = 5)
   ))
 }
 
-top_contributors_to_entity = function(entity_idx=4327273, n=10, start_date="null", end_date="null")
+top_contributors_to_entity = function(entity_idx=1859014, n=10, start_date="null", end_date="null")
 {
-  transactions = DB$between(TRANSACTION, null, R(entity_idx), R(start_date), null, null, R(entity_idx), R(end_date), null)
-  transactions_by_donor = DB$grouped_aggregate(transactions, 
+  transactions = db$between(TRANSACTION, null, R(entity_idx), R(start_date), null, null, R(entity_idx), R(end_date), null)
+  transactions_by_donor = db$grouped_aggregate(transactions, 
                                 "sum(transaction_amount) as total",
                                 "from_entity_idx")
-  transactions_by_donor = DB$sort(transactions_by_donor, "total desc")
-  transactions_by_donor = store(DB, transactions_by_donor, temp=T)
-  top_n = as.R(DB$between(transactions_by_donor, 0, R(n)))
-  other = as.R(DB$aggregate(DB$between(transactions_by_donor, R(n+1), null), "sum(total) as total"))
+  transactions_by_donor = db$sort(transactions_by_donor, "total desc")
+  transactions_by_donor = store(db, transactions_by_donor, temp=T)
+  top_n = as.R(db$between(transactions_by_donor, 0, R(n)))
+  other = db$between(transactions_by_donor, R(n+1), null)
+  other = as.R(db$aggregate(other, "sum(total) as total"))
   if(other$total > 0)
   {
     result = data.frame( from_entity_idx = c(top_n$from_entity_idx, -1),
@@ -171,8 +175,10 @@ top_contributors_to_entity = function(entity_idx=4327273, n=10, start_date="null
 
 get_entity_metadata = function(entity_idx_vector)
 {
-  entities = as.scidb(DB, entity_idx_vector, types=c("int64"))
-  entities = as.R(DB$equi_join(entities, ENTITY, "'left_names=val'", "'right_names=entity_idx'", "'left_outer=T'"))
+  entities = as.scidb(db, entity_idx_vector, types=c("int64"))
+  entities = as.R(db$equi_join(R(entities@name), ENTITY, "'left_names=val'", "'right_names=entity_idx'", "'left_outer=T'"))
+  #print(entities)
+  entities = entities[order(entities$val), ]
   entity_names = paste(entities$entity_id, "|", entities$entity_name)
   entity_names[is.na(entity_names)] = "OTHER"
   entity_types = entities$entity_type
@@ -180,9 +186,9 @@ get_entity_metadata = function(entity_idx_vector)
   return(data.frame(entity_name=entity_names, entity_type=entity_types))
 }
 
-candidate_contributor_network = function(candidate_idx=2570157, fanout=20, depth=2, start_date="null", end_date="null")
+candidate_contributor_network = function(candidate_idx=1859014, fanout=20, depth=2, start_date="null", end_date="null")
 {
-  candidate_pacs = as.R(DB$between(LINKAGE, R(candidate_idx), null, R(candidate_idx), null))
+  candidate_pacs = as.R(db$between(LINKAGE, R(candidate_idx), null, R(candidate_idx), null))
   result = data.frame(from_entity=c(), total=c(), to_entity=c())
   to_lookup = candidate_idx
   visited = c()
@@ -214,18 +220,19 @@ candidate_contributor_network = function(candidate_idx=2570157, fanout=20, depth
   return(result)
 }
 
-foo = function()
+network_visualization = function()
 {
-  result = candidate_contributor_network(depth=2) 
+  lookup_entity(entity_regex = 'TRUMP',entity_type = TYPE_CANDIDATE)
+  result = candidate_contributor_network(candidate_idx= 2136045, fanout=30, depth=2) 
   result = subset(result, from_entity_idx!=-1) ###MMEBE
-  indeces = unique(c(result$from_entity_idx, result$to_entity_idx))
+  indeces = sort(unique(c(result$from_entity_idx, result$to_entity_idx)))
   links = data.frame(Source=match(result$from_entity_idx, indeces)-1,
                      Target=match(result$to_entity_idx, indeces)-1,
                      Value= result$total)
-  nodes = get_entity_metadata(indeces)
+  nodes = get_entity_metadata(sort(indeces))
   forceNetwork(links, nodes, "Source", "Target", "Value", "entity_name", Group="entity_type",
-               linkWidth = networkD3::JS("function(d) { return Math.sqrt(d.value/1000000); }"))
-  
+               linkWidth = networkD3::JS("function(d) { return Math.sqrt(d.value/1000000); }"),
+               fontSize=16, opacity=0.9)
   
   result = candidate_contributor_network(depth=3, fanout=20, start_date="20150101", end_date="20160301") 
   result = subset(result, from_entity_idx!=-1) ###MMEBE
@@ -237,21 +244,21 @@ foo = function()
   forceNetwork(links, nodes, "Source", "Target", "Value", "entity_name", Group="entity_type",
                linkWidth = networkD3::JS("function(d) { return Math.sqrt(d.value/1000000); }"),
                opacity=1)
+}
+
+pca_plot = function()
+{
+  entities = iquery(db, "project(ENTITY, entity_name, entity_type)", return=T)
+  xpos = iquery(db, "filter(TSVD_RESULT, matrix=0 and to_entity_idx=0)", return=T)
+  ypos = iquery(db, "filter(TSVD_RESULT, matrix=0 and to_entity_idx=2)", return=T)
+  entities = entities[ order(entities$entity_idx), ]
+  xpos = xpos[ order(xpos$from_entity_idx ), ]
+  ypos = ypos[ order(xpos$from_entity_idx ), ]
+  entities$xpos=xpos$value
+  entities$ypos=ypos$value
+  entities = subset(entities, entity_type!=3)
   
-  #PAUL RYAN
-  result = candidate_contributor_network(candidate_idx=2184276, depth=3, fanout=10, start_date="null", end_date="null") 
-  result = subset(result, from_entity_idx!=-1) ###MMEBE
-  indeces = unique(c(result$from_entity_idx, result$to_entity_idx))
-  links = data.frame(Source=match(result$from_entity_idx, indeces)-1,
-                     Target=match(result$to_entity_idx, indeces)-1,
-                     Value= result$total)
-  nodes = get_entity_metadata(indeces)
-  forceNetwork(links, nodes, "Source", "Target", "Value", "entity_name", Group="entity_type",
-               linkWidth = networkD3::JS("function(d) { return Math.sqrt(d.value/1000000); }"),
-               opacity=1)
-  
-  
-  
+  plot_ly(entities, x=~xpos, y=~ypos, text=~entity_name, type="scattergl")
 }
 
 

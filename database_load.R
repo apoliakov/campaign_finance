@@ -45,7 +45,7 @@ ARRAYS["COMMITTEE"] = "
 
 load_committee = function()
 {
-  system("wget ftp://ftp.fec.gov/FEC/2016/cm16.zip", ignore.stdout=T, ignore.stderr=T)
+  system("wget https://www.fec.gov/files/bulk-downloads/2016/cm16.zip", ignore.stdout=T, ignore.stderr=T)
   system("unzip cm16.zip")
   iquery(DB, sprintf("
    store(
@@ -63,11 +63,11 @@ load_committee = function()
         committee_city,              a5,
         committee_state,             a6,
         committee_zip,               a7,
-        committee_designation,       char(a8),
-        committee_type,              char(a9),
+        committee_designation,       strchar(a8),
+        committee_type,              strchar(a9),
         committee_party,             a10,
-        committee_filing_freq,       char(a11),
-        committee_org_type,          char(a12),
+        committee_filing_freq,       strchar(a11),
+        committee_org_type,          strchar(a12),
         committee_connected_org,     a13,
         committee_candidate_id,      a14
        ),
@@ -106,7 +106,7 @@ ARRAYS["CANDIDATE"] = "
 
 load_candidate = function()
 {
-  system("wget ftp://ftp.fec.gov/FEC/2016/cn16.zip", ignore.stdout=T, ignore.stderr=T)
+  system("wget https://www.fec.gov/files/bulk-downloads/2016/cn16.zip", ignore.stdout=T, ignore.stderr=T)
   system("unzip cn16.zip")
   iquery(DB, sprintf("
    store(
@@ -121,10 +121,10 @@ load_candidate = function()
         candidate_party,             a2,
         candidate_election_year,     dcast(a3, int32(null)),
         candidate_office_state,      a4,
-        candidate_office,            char(a5),
+        candidate_office,            strchar(a5),
         candidate_office_dist,       a6,
-        candidate_ici,               char(a7),
-        candidate_status,            char(a8),
+        candidate_ici,               strchar(a7),
+        candidate_status,            strchar(a8),
         candidate_pcc,               a9,
         candidate_street1,           a10,
         candidate_street2,           a11,
@@ -159,7 +159,7 @@ ARRAYS["CANDIDATE_COMMITTEE_LINKAGE"] = "
 
 load_ccl = function()
 {
-  system("wget ftp://ftp.fec.gov/FEC/2016/ccl16.zip", ignore.stdout=T, ignore.stderr=T)
+  system("wget https://www.fec.gov/files/bulk-downloads/2016/ccl16.zip", ignore.stdout=T, ignore.stderr=T)
   system("unzip ccl16.zip")
   iquery(DB, sprintf("
    store(
@@ -173,8 +173,8 @@ load_ccl = function()
         candidate_election_year,     dcast(a1, int32(null)),
         fec_election_year,           dcast(a2, int32(null)),
         committee_id,                a3,
-        committee_type,              char(a4),
-        committee_designation,       char(a5),
+        committee_type,              strchar(a4),
+        committee_designation,       strchar(a5),
         linkage_id,                  int64(a6)
        ),
        ccl_idx
@@ -216,7 +216,7 @@ ARRAYS["COMMITTEE_TO_COMMITTEE"] = "
 
 load_oth = function()
 {
- system("wget ftp://ftp.fec.gov/FEC/2016/oth16.zip", ignore.stdout=T, ignore.stderr=T)
+ system("wget https://www.fec.gov/files/bulk-downloads/2016/oth16.zip", ignore.stdout=T, ignore.stderr=T)
  system("unzip oth16.zip")
  iquery(DB, sprintf("
   store(
@@ -227,7 +227,7 @@ load_oth = function()
          '%s/itoth.txt', 'num_attributes=21', 'attribute_delimiter=|'
        ),
        committee_id,                a0, 
-       amendment_id,                char(a1),
+       amendment_id,                strchar(a1),
        report_type,                 a2,
        transaction_pgi,             a3,
        image_num,                   a4,
@@ -246,7 +246,7 @@ load_oth = function()
        other_id,                    iif(a15 = '', null, a15),
        transaction_id,              a16,
        file_num,                    dcast(a17, int64(null)),
-       memo_co,                     char(a18),
+       memo_co,                     strchar(a18),
        memo_text,                   a19,
        sub_id,                      a20
       ),
@@ -290,7 +290,7 @@ ARRAYS["INDIVIDUAL_CONTRIBUTIONS"] = "
 
 load_indiv = function()
 {
- system("wget ftp://ftp.fec.gov/FEC/2016/indiv16.zip", ignore.stdout=T, ignore.stderr=T)
+ system("wget https://www.fec.gov/files/bulk-downloads/2016/indiv16.zip", ignore.stdout=T, ignore.stderr=T)
  system("unzip indiv16.zip")
  #The zip archive expands into two copies: one is a "by_date" directory
  #and the other is a regular text file with all the data.
@@ -305,7 +305,7 @@ load_indiv = function()
          '%s/itcont.txt', 'num_attributes=21', 'attribute_delimiter=|'
        ),
        committee_id,                a0, 
-       amendment_id,                char(a1),
+       amendment_id,                strchar(a1),
        report_type,                 a2,
        transaction_pgi,             a3,
        image_num,                   a4,
@@ -324,7 +324,7 @@ load_indiv = function()
        other_id,                    iif(a15 = '', null, a15),
        transaction_id,              a16,
        file_num,                    dcast(a17, int64(null)),
-       memo_co,                     char(a18),
+       memo_co,                     strchar(a18),
        memo_text,                   a19,
        sub_id,                      a20
       ),
@@ -350,7 +350,7 @@ create_entity = function()
     < entity_id            : string,
       entity_type          : int64,   --1: candidate, 2: committee, 3: individual, 4: unknown
       entity_name          : string>
-    [entity_idx = 0:*,400000,0]")
+    [entity_idx = 0:*,50000,0]")
   
   #Add all the candidates 
   iquery(DB, "
@@ -579,7 +579,7 @@ create_entity = function()
     < entity_id            : string,
       entity_type          : int64,   --1: candidate, 2: committee, 3: individual, 4: unknown
       entity_name          : string>
-    [entity_idx = 0:%i,400000,0]", num_entities-1))
+    [entity_idx = 0:%i,10000,0]", num_entities-1))
   
   #Now shuffle the array and store
   iquery(DB, "store(project(sort(apply(ENTITY_TMP, r, random()), r, 100000), entity_id, entity_type, entity_name), ENTITY)")
