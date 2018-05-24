@@ -9,6 +9,7 @@ library('xts')
 library('dygraphs')
 library('htmltools')
 library(networkD3)
+library(plotly)
 
 TYPE_CANDIDATE  = 1
 TYPE_PAC        = 2
@@ -246,19 +247,103 @@ network_visualization = function()
                opacity=1)
 }
 
+bin_example = function()
+{
+  t = TRANSACTION
+  as.R(db$limit(t, 10))
+  as.R(db$op_count(t))
+  
+  bin_month = db$apply(t, "month", "transaction_date_int/100")
+  as.R(db$limit(bin_month, 10))
+  
+  #bin_month = db$filter(bin_month, "transaction_type = '15'")
+  stats_by_month = db$grouped_aggregate(bin_month, "count(*) as volume",
+                                                   "max(transaction_amount) as max",
+                                                   "min(transaction_amount) as min", 
+                                                   "avg(transaction_amount) as avg",
+                                                   "median(transaction_amount) as median",
+                                                   "month")  
+  t1=proc.time(); 
+  result = as.R(stats_by_month, only_attributes=TRUE)
+  print(proc.time()-t1)
+  result
+  result = subset(result, month>201500)
+  result = subset(result, month<=201700)
+  result = result[order(result$month), ]   
+  result$month = as.character(result$month)
+  p <- plot_ly(result, x = ~month, xend = ~month) %>%
+    add_segments(y = ~min, yend = ~max, size = I(5)) %>%
+    add_lines(x = ~month, y=~avg) %>%
+    layout(showlegend = FALSE, yaxis = list(title = "Transaction")) 
+  p2 <- plot_ly(result, x=~month, y=~median, type='bar', name = "median") %>%
+    layout(yaxis = list(title = "Median"))
+  pp <- plot_ly(result, x=~month, y=~volume, type='bar', name = "volume") %>%
+    layout(yaxis = list(title = "Volume"))
+  p <- subplot(p, p2, pp, heights = c(0.6,0.2,0.2), nrows=3,
+               shareX = TRUE, titleY = TRUE) 
+  p
+  
+  
+  #####
+  ## Bin by day
+  bin_day = db$apply(t, "day", "transaction_date_int")
+  
+  #bin_month = db$filter(bin_month, "transaction_type = '15'")
+  stats_by_day = db$grouped_aggregate(bin_day, "count(*) as volume",
+                                        "max(transaction_amount) as max",
+                                        "min(transaction_amount) as min", 
+                                        "avg(transaction_amount) as avg",
+                                        "median(transaction_amount) as median",
+                                        "day")  
+  t1=proc.time(); 
+  result = as.R(stats_by_day, only_attributes=TRUE)
+  print(proc.time()-t1)
+  result
+  result = subset(result, day>20150000)
+  result = subset(result, day<=20170000)
+  result = result[order(result$day), ]   
+  result$day = as.character(result$day)
+  p <- plot_ly(result, x = ~day, xend = ~day) %>%
+    add_segments(y = ~min, yend = ~max, size = I(1)) %>%
+    add_lines(x = ~day, y=~avg) %>%
+    layout(showlegend = FALSE, yaxis = list(title = "Transaction")) 
+  p2 <- plot_ly(result, x=~day, y=~median, type='bar', name = "median") %>%
+    layout(yaxis = list(title = "Median"))
+  pp <- plot_ly(result, x=~day, y=~volume, type='bar', name = "volume") %>%
+    layout(yaxis = list(title = "Volume"))
+  p <- subplot(p, p2, pp, heights = c(0.6,0.2,0.2), nrows=3,
+               shareX = TRUE, titleY = TRUE) 
+  p
+  
+  #####
+  ## Bin by txn amount
+  bin_by_amount = db$apply(t, "bin", "(int64(transaction_amount) / 100) * 100")
+  result = as.R(db$grouped_aggregate(bin_by_amount, "count(*)", "bin"))
+  result = result[ order(result$bin) , ]
+  result$bin = paste(result$bin, "to", result$bin+100)
+  #result = result[order(result$count), ]
+  p <- plot_ly(result, x=~bin, y=~count, type="scatter" ) %>%
+    layout(xaxis = list(categoryorder="array", categoryarray = result$bin))
+  p
+}
+
+
 pca_plot = function()
 {
-  entities = iquery(db, "project(ENTITY, entity_name, entity_type)", return=T)
+  entities = iquery(db, "project(ENTITY, entity_id, entity_name, entity_type)", return=T)
   xpos = iquery(db, "filter(TSVD_RESULT, matrix=0 and to_entity_idx=0)", return=T)
-  ypos = iquery(db, "filter(TSVD_RESULT, matrix=0 and to_entity_idx=2)", return=T)
+  ypos = iquery(db, "filter(TSVD_RESULT, matrix=0 and to_entity_idx=1)", return=T)
+  zpos = iquery(db, "filter(TSVD_RESULT, matrix=0 and to_entity_idx=2)", return=T)
   entities = entities[ order(entities$entity_idx), ]
   xpos = xpos[ order(xpos$from_entity_idx ), ]
-  ypos = ypos[ order(xpos$from_entity_idx ), ]
+  ypos = ypos[ order(ypos$from_entity_idx ), ]
+  zpos = zpos[ order(zpos$from_entity_idx ), ]
   entities$xpos=xpos$value
   entities$ypos=ypos$value
-  entities = subset(entities, entity_type!=3)
-  
-  plot_ly(entities, x=~xpos, y=~ypos, text=~entity_name, type="scattergl")
+  entities$zpos=zpos$value
+  entities = subset(entities, entity_type==2)
+  entities$entity_label = paste(entities$entity_id, entities$entity_name)
+  plot_ly(entities, x=~xpos, y=~zpos, text=~entity_label, type="scattergl")
 }
 
 
